@@ -11,9 +11,22 @@ XRAY_BIN="/usr/local/bin/xray"
 echo "==> Каталог приложения: $APP_DIR"
 
 # --- системные пакеты ---------------------------------------------------
-echo "==> Ставлю системные пакеты (python3, venv, curl, unzip)…"
-sudo apt-get update -qq
-sudo apt-get install -y python3 python3-venv python3-pip curl unzip
+echo "==> Проверяю системные пакеты…"
+need=()
+command -v python3 >/dev/null 2>&1            || need+=(python3)
+python3 -m venv --help >/dev/null 2>&1         || need+=(python3-venv)
+command -v pip3 >/dev/null 2>&1                || need+=(python3-pip)
+command -v curl >/dev/null 2>&1                || need+=(curl)
+command -v unzip >/dev/null 2>&1               || need+=(unzip)
+
+if [ ${#need[@]} -gt 0 ]; then
+  echo "==> Ставлю недостающие пакеты: ${need[*]}"
+  # update может ругаться на сторонние репозитории (plex и т.п.) — это не критично.
+  sudo apt-get update -qq || true
+  sudo apt-get install -y "${need[@]}"
+else
+  echo "==> Все нужные пакеты уже установлены — apt не трогаю."
+fi
 
 # --- Xray-core ----------------------------------------------------------
 if command -v xray >/dev/null 2>&1; then
