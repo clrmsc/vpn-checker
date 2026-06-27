@@ -214,6 +214,13 @@ function start() {
 
 btn.addEventListener("click", start);
 urlEl.addEventListener("keydown", e => { if (e.key === "Enter") start(); });
+
+// Запоминаем последнюю ссылку между перезагрузками страницы.
+const LS_KEY = "vc_last_url";
+try { urlEl.value = localStorage.getItem(LS_KEY) || ""; } catch (e) {}
+urlEl.addEventListener("input", () => {
+  try { localStorage.setItem(LS_KEY, urlEl.value); } catch (e) {}
+});
 </script>
 </body>
 </html>
