@@ -122,21 +122,44 @@ function render() {
   $("#copyAll").disabled = !results.some(r => r.status === "ok" && r.link);
 }
 
+function flash(btn, label, ok) {
+  if (!btn) return;
+  const old = btn.dataset.label || btn.textContent;
+  btn.dataset.label = old;
+  btn.textContent = label; btn.classList.toggle("done", ok);
+  setTimeout(() => { btn.textContent = old; btn.classList.remove("done"); }, 1400);
+}
+
+// Запасное копирование для http:// (малинка по IP без TLS) — там
+// navigator.clipboard недоступен. Возвращает true только при реальном успехе.
+function legacyCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { ta.setSelectionRange(0, text.length); } catch (e) {}
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+  return ok;
+}
+
 function copyText(text, btn, okLabel) {
-  const done = () => {
-    if (!btn) return;
-    const old = btn.textContent;
-    btn.textContent = okLabel; btn.classList.add("done");
-    setTimeout(() => { btn.textContent = old; btn.classList.remove("done"); }, 1200);
+  const fail = () => {
+    // Честно: не смогли записать в буфер — показываем ссылку для ручного копирования,
+    // чтобы пользователь не получил из буфера старое значение.
+    flash(btn, "скопируйте вручную", false);
+    window.prompt("Скопируйте ссылку (Ctrl+C / Cmd+C):", text);
   };
   if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(text).then(done);
+    navigator.clipboard.writeText(text).then(
+      () => flash(btn, okLabel, true),
+      () => { legacyCopy(text) ? flash(btn, okLabel, true) : fail(); }
+    );
   } else {
-    // запасной путь для http:// (малинка по IP без TLS)
-    const ta = document.createElement("textarea");
-    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand("copy"); done(); } finally { ta.remove(); }
+    legacyCopy(text) ? flash(btn, okLabel, true) : fail();
   }
 }
 
