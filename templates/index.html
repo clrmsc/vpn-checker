@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN Checker</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115; color: #e6e6e6; padding: 24px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #8a909a; margin: 0 0 20px; font-size: 13px; }
+  .warn { background: #4a2020; border: 1px solid #7a3030; color: #ffb4b4;
+          padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+  .row { display: flex; gap: 8px; margin-bottom: 14px; }
+  input[type=text] {
+    flex: 1; padding: 12px 14px; border-radius: 8px; border: 1px solid #2a2f3a;
+    background: #171a21; color: #e6e6e6; font-size: 14px;
+  }
+  input[type=text]:focus { outline: none; border-color: #4f8cff; }
+  button {
+    padding: 12px 22px; border: 0; border-radius: 8px; background: #4f8cff;
+    color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { color: #8a909a; font-size: 13px; min-height: 20px; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #1d212a; font-size: 13px; }
+  th { color: #8a909a; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.name { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .ok   { background: #15331f; color: #5fe08a; }
+  .dead { background: #331515; color: #ff8a8a; }
+  .err  { background: #332a15; color: #ffd27a; }
+  .proto { color: #8a909a; font-size: 11px; text-transform: uppercase; }
+  .bar { position: relative; background: #1d212a; border-radius: 4px; height: 18px; min-width: 120px; }
+  .bar > span { position: absolute; inset: 0; width: 0; background: linear-gradient(90deg,#2f7d4f,#5fe08a);
+                border-radius: 4px; transition: width .3s; }
+  .bar > b { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end;
+             padding-right: 6px; font-size: 11px; font-weight: 600; color: #cfe8d6; }
+  .dim { color: #5a606b; }
+  .copy { padding: 4px 10px; font-size: 12px; font-weight: 500; background: #232834; }
+  .copy:hover { background: #2c3340; }
+  .copy.done { background: #15331f; color: #5fe08a; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; min-height: 32px; }
+  #copyAll { padding: 7px 14px; font-size: 13px; background: #232834; }
+  #copyAll:hover:not(:disabled) { background: #2c3340; }
+  tr.testing { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>VPN Checker</h1>
+  <p class="sub">Вставьте ссылку на подписку — проверю каждый узел через google.com и замерю скорость.</p>
+
+  {% if not xray_ok %}
+  <div class="warn">⚠ Xray не найден. Узлы проверяться не будут. Запустите <code>./install.sh</code>.</div>
+  {% endif %}
+
+  <div class="row">
+    <input type="text" id="url" placeholder="https://.../subscription/vless/...  или вставьте список vless://" autocomplete="off">
+    <button id="go">Проверить</button>
+  </div>
+  <div class="status" id="status"></div>
+
+  <div class="toolbar">
+    <button id="copyAll" disabled>⧉ Скопировать все рабочие</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>#</th><th>Узел</th><th>Статус</th><th>Пинг</th><th>Скорость, Мбит/с</th><th></th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const rows = $("#rows"), statusEl = $("#status"), btn = $("#go"), urlEl = $("#url");
+let maxSpeed = 1, es = null, results = [];
+
+function render() {
+  // живые узлы вверху по скорости, потом dead/error
+  const order = [...results].sort((a, b) => {
+    const rank = r => r.status === "ok" ? 0 : (r.status === "error" ? 1 : 2);
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    return (b.speed_mbps || 0) - (a.speed_mbps || 0);
+  });
+  maxSpeed = Math.max(1, ...results.map(r => r.speed_mbps || 0));
+  rows.innerHTML = "";
+  order.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    if (r.pending) tr.className = "testing";
+    let pill, ping = "—", speed = "—";
+    if (r.pending)      pill = `<span class="pill err">проверка…</span>`;
+    else if (r.status === "ok")    pill = `<span class="pill ok">работает</span>`;
+    else if (r.status === "error") pill = `<span class="pill err">ошибка</span>`;
+    else                pill = `<span class="pill dead">недоступен</span>`;
+
+    if (r.latency_ms != null) ping = r.latency_ms + " мс";
+    if (r.status === "ok" && r.speed_mbps != null) {
+      const pct = Math.min(100, (r.speed_mbps / maxSpeed) * 100);
+      speed = `<div class="bar"><span style="width:${pct}%"></span><b>${r.speed_mbps.toFixed(1)}</b></div>`;
+    } else if (r.error) {
+      speed = `<span class="dim">${r.error}</span>`;
+    }
+    let copyCell = "";
+    if (r.status === "ok" && r.link) {
+      copyCell = `<button class="copy" data-link="${esc(r.link)}">⧉ ссылка</button>`;
+    }
+    tr.innerHTML = `<td class="dim">${i + 1}</td>
+      <td class="name" title="${esc(r.name)}">${esc(r.name)} <span class="proto">${r.protocol || ""}</span></td>
+      <td>${pill}</td><td>${ping}</td><td>${speed}</td><td>${copyCell}</td>`;
+    rows.appendChild(tr);
+  });
+  $("#copyAll").disabled = !results.some(r => r.status === "ok" && r.link);
+}
+
+function copyText(text, btn, okLabel) {
+  const done = () => {
+    if (!btn) return;
+    const old = btn.textContent;
+    btn.textContent = okLabel; btn.classList.add("done");
+    setTimeout(() => { btn.textContent = old; btn.classList.remove("done"); }, 1200);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done);
+  } else {
+    // запасной путь для http:// (малинка по IP без TLS)
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); done(); } finally { ta.remove(); }
+  }
+}
+
+rows.addEventListener("click", e => {
+  const btn = e.target.closest(".copy");
+  if (btn) copyText(btn.dataset.link, btn, "✓ скопировано");
+});
+
+$("#copyAll").addEventListener("click", () => {
+  const links = [...results]
+    .filter(r => r.status === "ok" && r.link)
+    .sort((a, b) => (b.speed_mbps || 0) - (a.speed_mbps || 0))
+    .map(r => r.link)
+    .join("\n");
+  if (links) copyText(links, $("#copyAll"), "✓ скопировано");
+});
+function esc(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+function start() {
+  const url = urlEl.value.trim();
+  if (!url) return;
+  if (es) es.close();
+  results = []; render();
+  btn.disabled = true; statusEl.textContent = "Загружаю подписку…";
+
+  es = new EventSource("/api/check?url=" + encodeURIComponent(url));
+  let total = 0, done = 0;
+
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === "start") {
+      total = d.total;
+      results = Array.from({length: total}, (_, i) => ({pending: true, name: "узел " + (i+1)}));
+      statusEl.textContent = `Проверяю узлы: 0 / ${total}`;
+      render();
+    } else if (d.type === "result") {
+      results[d.index] = d;
+      done++;
+      statusEl.textContent = `Проверяю узлы: ${done} / ${total}`;
+      render();
+    } else if (d.type === "done") {
+      const alive = results.filter(r => r.status === "ok").length;
+      statusEl.textContent = `Готово. Работают: ${alive} из ${total}.`;
+      es.close(); btn.disabled = false;
+    } else if (d.type === "error") {
+      statusEl.textContent = "⚠ " + d.message;
+      es.close(); btn.disabled = false;
+    }
+  };
+  es.onerror = () => { statusEl.textContent = "Соединение прервано."; es.close(); btn.disabled = false; };
+}
+
+btn.addEventListener("click", start);
+urlEl.addEventListener("keydown", e => { if (e.key === "Enter") start(); });
+</script>
+</body>
+</html>
